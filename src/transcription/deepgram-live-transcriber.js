@@ -6,6 +6,8 @@ const KEEP_ALIVE_INTERVAL_MS = 3_000;
 const OPEN_TIMEOUT_MS = 10_000;
 const MAX_PENDING_AUDIO_CHUNKS = 50;
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen';
+const AUDIO_LOG_CHUNK_INTERVAL = 25;
+const RESULT_PREVIEW_LENGTH = 160;
 
 function createDeferred() {
   let resolve;
@@ -65,6 +67,18 @@ function normalizeMessagePayload(data) {
   return String(data);
 }
 
+function truncateForLog(value, maxLength = RESULT_PREVIEW_LENGTH) {
+  if (!value) {
+    return '';
+  }
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength)}...`;
+}
+
 class DeepgramLiveTranscriber {
   constructor({ kind, apiKey, model, language, sampleRate, channels, onStateChange }) {
     if (!apiKey) {
@@ -94,6 +108,10 @@ class DeepgramLiveTranscriber {
     this.lastAudioAt = 0;
     this.stopping = false;
     this.startPromise = null;
+    this.audioChunksSent = 0;
+    this.audioBytesSent = 0;
+    this.messagesReceived = 0;
+    this.keepAliveSent = 0;
   }
 
   setState(update) {
@@ -129,6 +147,8 @@ class DeepgramLiveTranscriber {
     this.closeSignal = createDeferred();
 
     try {
+      console.log(`[${this.kind}][deepgram] Opening websocket: ${connectionUrl}`);
+
       this.connection = new WebSocket(connectionUrl, {
         headers: {
           Authorization: `Token ${this.apiKey}`
@@ -191,10 +211,56 @@ class DeepgramLiveTranscriber {
 
     try {
       const message = JSON.parse(normalizeMessagePayload(data));
+      this.logIncomingMessage(message);
       this.handleMessage(message);
     } catch (error) {
       console.warn(`[${this.kind}][deepgram] Failed to parse message: ${error.message}`);
     }
+  }
+
+  logIncomingMessage(message) {
+    this.messagesReceived += 1;
+
+    if (!message || typeof message !== 'object') {
+      console.log(`[${this.kind}][deepgram] Received non-object message #${this.messagesReceived}.`);
+      return;
+    }
+
+    const messageType = message.type || 'Unknown';
+
+    if (messageType === 'Results') {
+      const transcript = message.channel?.alternatives?.[0]?.transcript?.trim() || '';
+      const preview = transcript ? `"${truncateForLog(transcript)}"` : '<empty>';
+
+      console.log(
+        `[${this.kind}][deepgram] Received Results #${this.messagesReceived}: final=${Boolean(
+          message.is_final
+        )}, speechFinal=${Boolean(message.speech_final)}, start=${message.start ?? 'n/a'}, duration=${
+          message.duration ?? 'n/a'
+        }, transcript=${preview}`
+      );
+      return;
+    }
+
+    if (messageType === 'Metadata') {
+      console.log(
+        `[${this.kind}][deepgram] Received Metadata #${this.messagesReceived}: request_id=${
+          message.request_id || 'n/a'
+        }, model=${message.model_info?.name || this.model}`
+      );
+      return;
+    }
+
+    if (messageType === 'UtteranceEnd') {
+      console.log(
+        `[${this.kind}][deepgram] Received UtteranceEnd #${this.messagesReceived}: last_word_end=${
+          message.last_word_end ?? 'n/a'
+        }`
+      );
+      return;
+    }
+
+    console.log(`[${this.kind}][deepgram] Received ${messageType} #${this.messagesReceived}.`);
   }
 
   handleMessage(message) {
@@ -275,7 +341,9 @@ class DeepgramLiveTranscriber {
       ? `Deepgram connection closed (code ${code}).${reason}`.trim()
       : 'Deepgram connection closed.';
 
-    console.warn(`[${this.kind}][deepgram] ${detail}`);
+    console.warn(
+      `[${this.kind}][deepgram] ${detail} Sent ${this.audioChunksSent} chunk(s) / ${this.audioBytesSent} bytes and received ${this.messagesReceived} message(s).`
+    );
 
     this.setState({
       transcriptionState: 'error',
@@ -318,6 +386,10 @@ class DeepgramLiveTranscriber {
       }
 
       try {
+        this.keepAliveSent += 1;
+        console.log(
+          `[${this.kind}][deepgram] Sending KeepAlive #${this.keepAliveSent} after idle period.`
+        );
         this.connection.send(JSON.stringify({ type: 'KeepAlive' }));
       } catch (error) {
         this.handleError(error);
@@ -341,11 +413,18 @@ class DeepgramLiveTranscriber {
       return;
     }
 
+    if (this.pendingAudioChunks.length > 0) {
+      console.log(
+        `[${this.kind}][deepgram] Flushing ${this.pendingAudioChunks.length} queued audio chunk(s).`
+      );
+    }
+
     while (this.pendingAudioChunks.length > 0) {
       const chunk = this.pendingAudioChunks.shift();
 
       try {
         this.connection.send(chunk);
+        this.recordAudioSent(chunk, 'flush');
       } catch (error) {
         this.handleError(error);
         this.pendingAudioChunks.unshift(chunk);
@@ -365,6 +444,7 @@ class DeepgramLiveTranscriber {
     if (this.connection && this.connection.readyState === SOCKET_OPEN_STATE) {
       try {
         this.connection.send(buffer);
+        this.recordAudioSent(buffer, 'live');
         return;
       } catch (error) {
         this.handleError(error);
@@ -376,6 +456,24 @@ class DeepgramLiveTranscriber {
     }
 
     this.pendingAudioChunks.push(Buffer.from(buffer));
+
+    if (this.pendingAudioChunks.length === 1) {
+      console.log(`[${this.kind}][deepgram] Queueing audio until websocket opens.`);
+    }
+  }
+
+  recordAudioSent(buffer, mode) {
+    this.audioChunksSent += 1;
+    this.audioBytesSent += buffer.length;
+
+    if (
+      this.audioChunksSent === 1 ||
+      this.audioChunksSent % AUDIO_LOG_CHUNK_INTERVAL === 0
+    ) {
+      console.log(
+        `[${this.kind}][deepgram] Sent audio chunk #${this.audioChunksSent} via ${mode} (${buffer.length} bytes, total ${this.audioBytesSent} bytes).`
+      );
+    }
   }
 
   async stop() {
@@ -398,8 +496,10 @@ class DeepgramLiveTranscriber {
 
     try {
       if (this.connection.readyState === SOCKET_OPEN_STATE) {
+        console.log(`[${this.kind}][deepgram] Sending Finalize.`);
         this.connection.send(JSON.stringify({ type: 'Finalize' }));
         await delay(150);
+        console.log(`[${this.kind}][deepgram] Sending CloseStream.`);
         this.connection.send(JSON.stringify({ type: 'CloseStream' }));
       }
 
