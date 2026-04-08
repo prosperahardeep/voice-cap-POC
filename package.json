@@ -1,0 +1,19 @@
+{
+  "name": "voice-cap-poc",
+  "version": "1.0.0",
+  "description": "Electron proof of concept for capturing microphone and macOS system audio separately.",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "audiotee": "^0.0.7"
+  },
+  "devDependencies": {
+    "electron": "^41.0.0"
+  }
+}
