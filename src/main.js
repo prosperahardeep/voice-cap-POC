@@ -84,11 +84,23 @@ function publishTranscriptState() {
   transcriptWindow.webContents.send('transcript:state', snapshotTranscriptState());
 }
 
+function publishSourceState(kind) {
+  if (!transcriptWindow || transcriptWindow.isDestroyed()) {
+    return;
+  }
+
+  transcriptWindow.webContents.send('transcript:source-state', {
+    kind,
+    source: { ...transcriptState.sources[kind] }
+  });
+}
+
 function updateSourceState(kind, update) {
   Object.assign(transcriptState.sources[kind], update, {
     updatedAt: Date.now()
   });
   publishTranscriptState();
+  publishSourceState(kind);
 }
 
 function getActiveCaptureDetail(kind, audioDetected = false) {
@@ -218,8 +230,8 @@ async function createTranscriptWindow() {
     backgroundColor: '#07171d',
     webPreferences: {
       preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
+      contextIsolation: false,
+      nodeIntegration: true,
       sandbox: false,
       backgroundThrottling: false
     }
@@ -239,6 +251,12 @@ async function createTranscriptWindow() {
 
   transcriptWindow.webContents.on('did-finish-load', () => {
     publishTranscriptState();
+  });
+
+  transcriptWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const levelLabels = ['debug', 'info', 'warn', 'error'];
+    const label = levelLabels[level] || 'log';
+    console.log(`[transcript-window][${label}] ${message} (${sourceId}:${line})`);
   });
 
   await transcriptWindow.loadFile(htmlPath);

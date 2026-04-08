@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('transcriptBridge', {
+const transcriptBridge = {
   getState() {
     return ipcRenderer.invoke('transcript:get-state');
   },
@@ -14,5 +14,22 @@ contextBridge.exposeInMainWorld('transcriptBridge', {
     return () => {
       ipcRenderer.off('transcript:state', wrappedListener);
     };
+  },
+  onSourceUpdate(listener) {
+    const wrappedListener = (_event, payload) => {
+      listener(payload);
+    };
+
+    ipcRenderer.on('transcript:source-state', wrappedListener);
+
+    return () => {
+      ipcRenderer.off('transcript:source-state', wrappedListener);
+    };
   }
-});
+};
+
+if (process.contextIsolated) {
+  contextBridge.exposeInMainWorld('transcriptBridge', transcriptBridge);
+} else {
+  window.transcriptBridge = transcriptBridge;
+}

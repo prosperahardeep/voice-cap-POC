@@ -1,5 +1,47 @@
-const transcriptBridge = window.transcriptBridge;
 const REFRESH_INTERVAL_MS = 500;
+
+function createTranscriptBridge() {
+  if (window.transcriptBridge) {
+    return window.transcriptBridge;
+  }
+
+  try {
+    const { ipcRenderer } = require('electron');
+
+    return {
+      getState() {
+        return ipcRenderer.invoke('transcript:get-state');
+      },
+      onStateUpdate(listener) {
+        const wrappedListener = (_event, payload) => {
+          listener(payload);
+        };
+
+        ipcRenderer.on('transcript:state', wrappedListener);
+
+        return () => {
+          ipcRenderer.off('transcript:state', wrappedListener);
+        };
+      },
+      onSourceUpdate(listener) {
+        const wrappedListener = (_event, payload) => {
+          listener(payload);
+        };
+
+        ipcRenderer.on('transcript:source-state', wrappedListener);
+
+        return () => {
+          ipcRenderer.off('transcript:source-state', wrappedListener);
+        };
+      }
+    };
+  } catch (error) {
+    console.error('[transcript-view] Failed to create transcript bridge:', error);
+    return null;
+  }
+}
+
+const transcriptBridge = createTranscriptBridge();
 
 const sourceElements = {
   mic: collectSourceElements('mic'),
@@ -9,6 +51,13 @@ const sourceElements = {
 const emptyMessages = {
   mic: 'Waiting for microphone transcript...',
   system: 'Waiting for third party audio transcript...'
+};
+
+const localState = {
+  sources: {
+    mic: {},
+    system: {}
+  }
 };
 
 function collectSourceElements(sourceId) {
@@ -66,6 +115,10 @@ function getTranscriptText(sourceId, sourceState) {
   return emptyMessages[sourceId];
 }
 
+function scrollTranscriptToLatest(element) {
+  element.scrollTop = element.scrollHeight;
+}
+
 function renderSource(sourceId, sourceState) {
   const elements = sourceElements[sourceId];
   const text = getTranscriptText(sourceId, sourceState);
@@ -75,27 +128,69 @@ function renderSource(sourceId, sourceState) {
   scrollTranscriptToLatest(elements.transcript);
 }
 
-function render(state) {
-  renderSource('mic', state.sources.mic);
-  renderSource('system', state.sources.system);
+function mergeFullState(nextState) {
+  localState.meta = nextState?.meta || localState.meta;
+  localState.sources.mic = {
+    ...localState.sources.mic,
+    ...(nextState?.sources?.mic || {})
+  };
+  localState.sources.system = {
+    ...localState.sources.system,
+    ...(nextState?.sources?.system || {})
+  };
+
+  renderSource('mic', localState.sources.mic);
+  renderSource('system', localState.sources.system);
+}
+
+function mergeSourceState(payload) {
+  if (!payload?.kind || !payload.source) {
+    return;
+  }
+
+  localState.sources[payload.kind] = {
+    ...localState.sources[payload.kind],
+    ...payload.source
+  };
+
+  renderSource(payload.kind, localState.sources[payload.kind]);
+
+  const preview = getTranscriptText(payload.kind, localState.sources[payload.kind]);
+  console.log(
+    `[transcript-view] Updated ${payload.kind} panel with ${preview.length} visible character(s).`
+  );
 }
 
 let removeStateListener = null;
+let removeSourceListener = null;
 let refreshTimer = null;
 
 async function refreshState() {
   const nextState = await transcriptBridge.getState();
-  render(nextState);
+  mergeFullState(nextState);
 }
 
-function scrollTranscriptToLatest(element) {
-  element.scrollTop = element.scrollHeight;
+function renderInitializationError(message) {
+  for (const sourceId of ['mic', 'system']) {
+    sourceElements[sourceId].transcript.textContent = message;
+    sourceElements[sourceId].transcript.dataset.empty = 'false';
+  }
 }
 
 async function bootstrap() {
+  if (!transcriptBridge) {
+    renderInitializationError('Transcript bridge is unavailable in the renderer.');
+    return;
+  }
+
   await refreshState();
+
   removeStateListener = transcriptBridge.onStateUpdate((nextState) => {
-    render(nextState);
+    mergeFullState(nextState);
+  });
+
+  removeSourceListener = transcriptBridge.onSourceUpdate((payload) => {
+    mergeSourceState(payload);
   });
 
   refreshTimer = window.setInterval(() => {
@@ -107,6 +202,8 @@ async function bootstrap() {
 
 window.addEventListener('beforeunload', () => {
   removeStateListener?.();
+  removeSourceListener?.();
+
   if (refreshTimer !== null) {
     window.clearInterval(refreshTimer);
     refreshTimer = null;
@@ -115,4 +212,5 @@ window.addEventListener('beforeunload', () => {
 
 bootstrap().catch((error) => {
   console.error('[transcript-view] Failed to initialize renderer:', error);
+  renderInitializationError(`Renderer initialization failed: ${error.message || error}`);
 });
