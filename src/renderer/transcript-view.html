@@ -12,117 +12,15 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="app-header">
-        <div>
-          <p class="eyebrow">Live Speech To Text</p>
-          <h1 class="title">Mic and System Audio Transcripts</h1>
-          <p class="subtitle" data-role="summary">
-            Preparing capture and Deepgram live transcription.
-          </p>
-        </div>
-        <section class="meta-grid" aria-label="Session metadata">
-          <article class="meta-card">
-            <p class="meta-label">Deepgram</p>
-            <p class="meta-value" data-role="deepgram-status">Checking configuration...</p>
-          </article>
-          <article class="meta-card">
-            <p class="meta-label">Model</p>
-            <p class="meta-value" data-role="model-name">-</p>
-          </article>
-          <article class="meta-card">
-            <p class="meta-label">Workspace</p>
-            <p class="meta-value" data-role="project-root">-</p>
-          </article>
-        </section>
-      </header>
-
       <section class="panel-grid">
         <article class="source-panel" data-source="mic">
-          <div class="panel-head">
-            <div>
-              <p class="panel-kicker">Input</p>
-              <h2 class="panel-title">Microphone</h2>
-            </div>
-            <div class="badge-stack">
-              <span class="status-badge" data-role="capture-badge">Capture: waiting</span>
-              <span class="status-badge" data-role="transcription-badge">STT: waiting</span>
-            </div>
-          </div>
-
-          <section class="detail-list">
-            <article class="detail-card">
-              <p class="detail-label">Capture</p>
-              <p class="detail-value" data-role="capture-detail">Waiting to start microphone capture.</p>
-            </article>
-            <article class="detail-card">
-              <p class="detail-label">Transcription</p>
-              <p class="detail-value" data-role="transcription-detail">
-                Waiting to start microphone transcription.
-              </p>
-            </article>
-          </section>
-
-          <section class="transcript-stack">
-            <article class="transcript-card" data-variant="final">
-              <p class="transcript-label">Confirmed Transcript</p>
-              <pre class="transcript-text" data-role="final-transcript">Waiting for microphone transcript...</pre>
-            </article>
-            <article class="transcript-card" data-variant="interim">
-              <p class="transcript-label">Live Interim</p>
-              <p class="transcript-interim" data-role="interim-transcript">
-                Live partial text will appear here.
-              </p>
-            </article>
-          </section>
-
-          <footer class="panel-foot">
-            <span data-role="output-file">Output file: -</span>
-            <span data-role="updated-at">Updated: -</span>
-          </footer>
+          <h2 class="panel-title">Input microphone</h2>
+          <pre class="transcript-text" data-role="transcript">Waiting for microphone transcript...</pre>
         </article>
 
         <article class="source-panel" data-source="system">
-          <div class="panel-head">
-            <div>
-              <p class="panel-kicker">Input</p>
-              <h2 class="panel-title">System Audio</h2>
-            </div>
-            <div class="badge-stack">
-              <span class="status-badge" data-role="capture-badge">Capture: waiting</span>
-              <span class="status-badge" data-role="transcription-badge">STT: waiting</span>
-            </div>
-          </div>
-
-          <section class="detail-list">
-            <article class="detail-card">
-              <p class="detail-label">Capture</p>
-              <p class="detail-value" data-role="capture-detail">Waiting to start system capture.</p>
-            </article>
-            <article class="detail-card">
-              <p class="detail-label">Transcription</p>
-              <p class="detail-value" data-role="transcription-detail">
-                Waiting to start system transcription.
-              </p>
-            </article>
-          </section>
-
-          <section class="transcript-stack">
-            <article class="transcript-card" data-variant="final">
-              <p class="transcript-label">Confirmed Transcript</p>
-              <pre class="transcript-text" data-role="final-transcript">Waiting for system audio transcript...</pre>
-            </article>
-            <article class="transcript-card" data-variant="interim">
-              <p class="transcript-label">Live Interim</p>
-              <p class="transcript-interim" data-role="interim-transcript">
-                Live partial text will appear here.
-              </p>
-            </article>
-          </section>
-
-          <footer class="panel-foot">
-            <span data-role="output-file">Output file: -</span>
-            <span data-role="updated-at">Updated: -</span>
-          </footer>
+          <h2 class="panel-title">Input Third party Audio</h2>
+          <pre class="transcript-text" data-role="transcript">Waiting for third party audio transcript...</pre>
         </article>
       </section>
     </main>
