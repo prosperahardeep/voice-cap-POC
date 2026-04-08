@@ -1,4 +1,5 @@
 const { DeepgramClient } = require('@deepgram/sdk');
+const { WebSocket: NodeWebSocket } = require('ws');
 
 const SOCKET_OPEN_STATE = 1;
 const KEEP_ALIVE_INTERVAL_MS = 3_000;
@@ -22,6 +23,16 @@ function delay(timeoutMs) {
   });
 }
 
+function ensureNodeWebSocketTransport() {
+  if (!process.versions?.node) {
+    return;
+  }
+
+  if (globalThis.WebSocket !== NodeWebSocket) {
+    globalThis.WebSocket = NodeWebSocket;
+  }
+}
+
 class DeepgramLiveTranscriber {
   constructor({ kind, apiKey, model, language, sampleRate, channels, onStateChange }) {
     if (!apiKey) {
@@ -40,6 +51,7 @@ class DeepgramLiveTranscriber {
     this.channels = channels;
     this.onStateChange = onStateChange;
 
+    ensureNodeWebSocketTransport();
     this.client = new DeepgramClient({ apiKey: this.apiKey });
     this.connection = null;
     this.keepAliveTimer = null;
@@ -142,8 +154,20 @@ class DeepgramLiveTranscriber {
     }
 
     switch (message.type) {
+      case 'Metadata':
+        this.setState({
+          transcriptionState: 'listening',
+          transcriptionDetail: `Connected to Deepgram (${this.model}). Waiting for speech...`
+        });
+        break;
       case 'Results':
         this.handleResults(message);
+        break;
+      case 'SpeechStarted':
+        this.setState({
+          transcriptionState: 'listening',
+          transcriptionDetail: `Speech detected. Transcribing with Deepgram (${this.model})...`
+        });
         break;
       case 'UtteranceEnd':
         this.interimTranscript = '';
@@ -201,6 +225,8 @@ class DeepgramLiveTranscriber {
     const detail = code
       ? `Deepgram connection closed (code ${code}). Waiting to reconnect...`
       : 'Deepgram connection closed. Waiting to reconnect...';
+
+    console.warn(`[${this.kind}][deepgram] ${detail}`);
 
     this.setState({
       transcriptionState: 'connecting',

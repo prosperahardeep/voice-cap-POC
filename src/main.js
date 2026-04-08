@@ -357,6 +357,21 @@ function createDeepgramTranscriber(kind) {
   });
 }
 
+function startTranscriber(kind, transcriber) {
+  if (!transcriber) {
+    return;
+  }
+
+  void transcriber.start().catch((error) => {
+    const detail = error?.message || String(error);
+    console.error(`[${kind}][deepgram] Failed to start live transcription: ${detail}`);
+    updateSourceState(kind, {
+      transcriptionState: 'error',
+      transcriptionDetail: detail
+    });
+  });
+}
+
 function configureSourceOutput(kind, writer) {
   updateSourceState(kind, {
     outputFile: writer?.filePath || null
@@ -420,13 +435,11 @@ async function startCaptures() {
 
   if (DEEPGRAM_API_KEY) {
     systemTranscriber = createDeepgramTranscriber('system');
-    void systemTranscriber.start().catch(() => {
-    });
+    startTranscriber('system', systemTranscriber);
 
     if (shouldCaptureMic) {
       micTranscriber = createDeepgramTranscriber('mic');
-      void micTranscriber.start().catch(() => {
-      });
+      startTranscriber('mic', micTranscriber);
     }
   } else {
     markTranscriptionDisabled(
