@@ -1,5 +1,4 @@
 const { DeepgramClient } = require('@deepgram/sdk');
-const { WebSocket: NodeWebSocket } = require('ws');
 
 const SOCKET_OPEN_STATE = 1;
 const KEEP_ALIVE_INTERVAL_MS = 3_000;
@@ -23,16 +22,6 @@ function delay(timeoutMs) {
   });
 }
 
-function ensureNodeWebSocketTransport() {
-  if (!process.versions?.node) {
-    return;
-  }
-
-  if (globalThis.WebSocket !== NodeWebSocket) {
-    globalThis.WebSocket = NodeWebSocket;
-  }
-}
-
 class DeepgramLiveTranscriber {
   constructor({ kind, apiKey, model, language, sampleRate, channels, onStateChange }) {
     if (!apiKey) {
@@ -51,7 +40,6 @@ class DeepgramLiveTranscriber {
     this.channels = channels;
     this.onStateChange = onStateChange;
 
-    ensureNodeWebSocketTransport();
     this.client = new DeepgramClient({ apiKey: this.apiKey });
     this.connection = null;
     this.keepAliveTimer = null;
@@ -93,19 +81,19 @@ class DeepgramLiveTranscriber {
         encoding: 'linear16',
         sample_rate: this.sampleRate,
         channels: this.channels,
-        interim_results: true,
-        punctuate: true,
-        smart_format: true,
-        endpointing: 300,
-        utterance_end_ms: 1_000,
-        vad_events: true
+        interim_results: true
       };
 
       if (this.language) {
         connectionArgs.language = this.language;
       }
 
-      this.connection = await this.client.listen.v1.connect(connectionArgs);
+      const createConnection =
+        typeof this.client.listen?.v1?.createConnection === 'function'
+          ? this.client.listen.v1.createConnection.bind(this.client.listen.v1)
+          : this.client.listen.v1.connect.bind(this.client.listen.v1);
+
+      this.connection = await createConnection(connectionArgs);
       this.closeSignal = createDeferred();
 
       this.connection.on('open', () => {
@@ -125,8 +113,8 @@ class DeepgramLiveTranscriber {
       });
 
       this.connection.connect();
-      this.startKeepAlive();
       await this.connection.waitForOpen();
+      this.startKeepAlive();
     } catch (error) {
       this.handleError(error);
       throw error;
