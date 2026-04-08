@@ -1,8 +1,11 @@
-const { DeepgramClient } = require('@deepgram/sdk');
+const WebSocket = require('ws');
+const { URL } = require('node:url');
 
 const SOCKET_OPEN_STATE = 1;
 const KEEP_ALIVE_INTERVAL_MS = 3_000;
+const OPEN_TIMEOUT_MS = 10_000;
 const MAX_PENDING_AUDIO_CHUNKS = 50;
+const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v1/listen';
 
 function createDeferred() {
   let resolve;
@@ -20,6 +23,46 @@ function delay(timeoutMs) {
   return new Promise((resolve) => {
     setTimeout(resolve, timeoutMs);
   });
+}
+
+function buildListenUrl({ model, language, sampleRate, channels }) {
+  const url = new URL(DEEPGRAM_LISTEN_URL);
+
+  url.searchParams.set('model', model);
+  url.searchParams.set('encoding', 'linear16');
+  url.searchParams.set('sample_rate', String(sampleRate));
+  url.searchParams.set('channels', String(channels));
+  url.searchParams.set('interim_results', 'true');
+
+  if (language) {
+    url.searchParams.set('language', language);
+  }
+
+  return url.toString();
+}
+
+function normalizeMessagePayload(data) {
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  if (Buffer.isBuffer(data)) {
+    return data.toString('utf8');
+  }
+
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString('utf8');
+  }
+
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString('utf8');
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
+  }
+
+  return String(data);
 }
 
 class DeepgramLiveTranscriber {
@@ -40,15 +83,15 @@ class DeepgramLiveTranscriber {
     this.channels = channels;
     this.onStateChange = onStateChange;
 
-    this.client = new DeepgramClient({ apiKey: this.apiKey });
     this.connection = null;
+    this.openSignal = null;
+    this.closeSignal = null;
     this.keepAliveTimer = null;
     this.pendingAudioChunks = [];
     this.finalSegments = [];
     this.interimTranscript = '';
     this.lastFinalSignature = null;
     this.lastAudioAt = 0;
-    this.closeSignal = null;
     this.stopping = false;
     this.startPromise = null;
   }
@@ -75,45 +118,49 @@ class DeepgramLiveTranscriber {
       transcriptionDetail: `Connecting to Deepgram (${this.model})...`
     });
 
+    const connectionUrl = buildListenUrl({
+      model: this.model,
+      language: this.language,
+      sampleRate: this.sampleRate,
+      channels: this.channels
+    });
+
+    this.openSignal = createDeferred();
+    this.closeSignal = createDeferred();
+
     try {
-      const connectionArgs = {
-        model: this.model,
-        encoding: 'linear16',
-        sample_rate: this.sampleRate,
-        channels: this.channels,
-        interim_results: true
-      };
-
-      if (this.language) {
-        connectionArgs.language = this.language;
-      }
-
-      const createConnection =
-        typeof this.client.listen?.v1?.createConnection === 'function'
-          ? this.client.listen.v1.createConnection.bind(this.client.listen.v1)
-          : this.client.listen.v1.connect.bind(this.client.listen.v1);
-
-      this.connection = await createConnection(connectionArgs);
-      this.closeSignal = createDeferred();
+      this.connection = new WebSocket(connectionUrl, {
+        headers: {
+          Authorization: `Token ${this.apiKey}`
+        }
+      });
 
       this.connection.on('open', () => {
         this.handleOpen();
       });
 
-      this.connection.on('message', (message) => {
-        this.handleMessage(message);
+      this.connection.on('message', (data) => {
+        this.handleRawMessage(data);
       });
 
-      this.connection.on('close', (event) => {
-        this.handleClose(event);
+      this.connection.on('close', (code, reasonBuffer) => {
+        this.handleClose({
+          code,
+          reason: Buffer.isBuffer(reasonBuffer) ? reasonBuffer.toString('utf8') : reasonBuffer
+        });
       });
 
       this.connection.on('error', (error) => {
         this.handleError(error);
       });
 
-      this.connection.connect();
-      await this.connection.waitForOpen();
+      await Promise.race([
+        this.openSignal.promise,
+        delay(OPEN_TIMEOUT_MS).then(() => {
+          throw new Error(`Timed out connecting to Deepgram after ${OPEN_TIMEOUT_MS}ms.`);
+        })
+      ]);
+
       this.startKeepAlive();
     } catch (error) {
       this.handleError(error);
@@ -127,6 +174,7 @@ class DeepgramLiveTranscriber {
     }
 
     console.log(`[${this.kind}][deepgram] Live transcription connected.`);
+    this.openSignal?.resolve();
 
     this.setState({
       transcriptionState: 'listening',
@@ -136,8 +184,21 @@ class DeepgramLiveTranscriber {
     this.flushPendingAudio();
   }
 
+  handleRawMessage(data) {
+    if (this.stopping) {
+      return;
+    }
+
+    try {
+      const message = JSON.parse(normalizeMessagePayload(data));
+      this.handleMessage(message);
+    } catch (error) {
+      console.warn(`[${this.kind}][deepgram] Failed to parse message: ${error.message}`);
+    }
+  }
+
   handleMessage(message) {
-    if (this.stopping || !message || typeof message !== 'object') {
+    if (!message || typeof message !== 'object') {
       return;
     }
 
@@ -201,29 +262,31 @@ class DeepgramLiveTranscriber {
   }
 
   handleClose(event) {
-    if (this.closeSignal) {
-      this.closeSignal.resolve();
-    }
+    this.closeSignal?.resolve();
+
+    const code = typeof event?.code === 'number' ? event.code : null;
+    const reason = event?.reason ? ` ${event.reason}` : '';
 
     if (this.stopping) {
       return;
     }
 
-    const code = typeof event?.code === 'number' ? event.code : null;
     const detail = code
-      ? `Deepgram connection closed (code ${code}). Waiting to reconnect...`
-      : 'Deepgram connection closed. Waiting to reconnect...';
+      ? `Deepgram connection closed (code ${code}).${reason}`.trim()
+      : 'Deepgram connection closed.';
 
     console.warn(`[${this.kind}][deepgram] ${detail}`);
 
     this.setState({
-      transcriptionState: 'connecting',
+      transcriptionState: 'error',
       transcriptionDetail: detail
     });
   }
 
   handleError(error) {
     const message = error?.message || String(error);
+
+    this.openSignal?.reject?.(error);
 
     if (this.stopping) {
       return;
@@ -255,7 +318,7 @@ class DeepgramLiveTranscriber {
       }
 
       try {
-        this.connection.sendKeepAlive({ type: 'KeepAlive' });
+        this.connection.send(JSON.stringify({ type: 'KeepAlive' }));
       } catch (error) {
         this.handleError(error);
       }
@@ -282,7 +345,7 @@ class DeepgramLiveTranscriber {
       const chunk = this.pendingAudioChunks.shift();
 
       try {
-        this.connection.sendMedia(chunk);
+        this.connection.send(chunk);
       } catch (error) {
         this.handleError(error);
         this.pendingAudioChunks.unshift(chunk);
@@ -301,7 +364,7 @@ class DeepgramLiveTranscriber {
 
     if (this.connection && this.connection.readyState === SOCKET_OPEN_STATE) {
       try {
-        this.connection.sendMedia(buffer);
+        this.connection.send(buffer);
         return;
       } catch (error) {
         this.handleError(error);
@@ -335,8 +398,9 @@ class DeepgramLiveTranscriber {
 
     try {
       if (this.connection.readyState === SOCKET_OPEN_STATE) {
-        this.connection.sendFinalize({ type: 'Finalize' });
-        this.connection.sendCloseStream({ type: 'CloseStream' });
+        this.connection.send(JSON.stringify({ type: 'Finalize' }));
+        await delay(150);
+        this.connection.send(JSON.stringify({ type: 'CloseStream' }));
       }
 
       if (this.closeSignal) {
@@ -351,6 +415,8 @@ class DeepgramLiveTranscriber {
       }
 
       this.connection = null;
+      this.openSignal = null;
+      this.closeSignal = null;
       this.pendingAudioChunks.length = 0;
 
       this.setState({
