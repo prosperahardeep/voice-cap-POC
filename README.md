@@ -23,13 +23,19 @@ Audio is written to:
 
 ```bash
 npm install
-DEEPGRAM_API_KEY=your_key_here npm start
+npm start
 ```
 
-Optional environment variables:
+Environment setup:
+
+- Create a local `.env` file from `.env.example`
+- `dotenv` is loaded automatically by the Electron main process on startup
+
+Available variables:
 
 - `DEEPGRAM_MODEL` to override the default model (`nova-3`)
 - `DEEPGRAM_LANGUAGE` to pin the transcription language instead of using the model default
+- `DEEPGRAM_API_KEY` to enable live Deepgram transcription
 
 If `DEEPGRAM_API_KEY` is not set, the app still captures audio and writes WAV files,
 but the transcript screen will show Deepgram transcription as disabled.

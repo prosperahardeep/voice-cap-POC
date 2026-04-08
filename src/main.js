@@ -2,6 +2,7 @@ const { execFile } = require('node:child_process');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const { app, BrowserWindow, ipcMain } = require('electron');
+require('dotenv').config();
 
 const { startMicCapture } = require('./capture/mic-capture');
 const { startSystemAudioCapture } = require('./capture/system-audio-capture');
