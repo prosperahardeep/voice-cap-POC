@@ -1,4 +1,5 @@
 const transcriptBridge = window.transcriptBridge;
+const REFRESH_INTERVAL_MS = 500;
 
 const sourceElements = {
   mic: collectSourceElements('mic'),
@@ -71,6 +72,7 @@ function renderSource(sourceId, sourceState) {
 
   elements.transcript.textContent = text;
   elements.transcript.dataset.empty = String(text === emptyMessages[sourceId]);
+  scrollTranscriptToLatest(elements.transcript);
 }
 
 function render(state) {
@@ -79,18 +81,36 @@ function render(state) {
 }
 
 let removeStateListener = null;
+let refreshTimer = null;
+
+async function refreshState() {
+  const nextState = await transcriptBridge.getState();
+  render(nextState);
+}
+
+function scrollTranscriptToLatest(element) {
+  element.scrollTop = element.scrollHeight;
+}
 
 async function bootstrap() {
-  const initialState = await transcriptBridge.getState();
-  render(initialState);
-
+  await refreshState();
   removeStateListener = transcriptBridge.onStateUpdate((nextState) => {
     render(nextState);
   });
+
+  refreshTimer = window.setInterval(() => {
+    refreshState().catch((error) => {
+      console.error('[transcript-view] Failed to refresh transcript state:', error);
+    });
+  }, REFRESH_INTERVAL_MS);
 }
 
 window.addEventListener('beforeunload', () => {
   removeStateListener?.();
+  if (refreshTimer !== null) {
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
 });
 
 bootstrap().catch((error) => {
