@@ -11,6 +11,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@deepgram/sdk": "^5.0.0",
     "audiotee": "^0.0.7"
   },
   "devDependencies": {
