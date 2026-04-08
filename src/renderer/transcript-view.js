@@ -34,6 +34,34 @@ function getTranscriptText(sourceId, sourceState) {
     return interimText;
   }
 
+  if (sourceState.transcriptionState === 'error') {
+    return sourceState.transcriptionDetail || emptyMessages[sourceId];
+  }
+
+  if (sourceState.captureState === 'error' || sourceState.captureState === 'unavailable') {
+    return sourceState.captureDetail || emptyMessages[sourceId];
+  }
+
+  if (sourceState.transcriptionState === 'disabled') {
+    return sourceState.transcriptionDetail || emptyMessages[sourceId];
+  }
+
+  if (sourceState.captureDetail?.toLowerCase().includes('silence')) {
+    return sourceState.captureDetail;
+  }
+
+  if (sourceState.transcriptionState === 'connecting') {
+    return sourceState.transcriptionDetail || 'Connecting to Deepgram...';
+  }
+
+  if (sourceState.transcriptionState === 'listening') {
+    return 'Listening... waiting for speech.';
+  }
+
+  if (sourceState.captureState === 'active') {
+    return sourceState.captureDetail || 'Capture is active. Waiting for speech...';
+  }
+
   return emptyMessages[sourceId];
 }
 

@@ -87,10 +87,6 @@ async function startSystemAudioCapture(onData) {
     console.error('[system] AudioTee error:', error);
   };
 
-  const handleLog = (...args) => {
-    console.log('[system][audiotee]', ...args);
-  };
-
   const removeListener =
     typeof audiotee.off === 'function'
       ? audiotee.off.bind(audiotee)
@@ -98,7 +94,6 @@ async function startSystemAudioCapture(onData) {
 
   audiotee.on?.('data', handleData);
   audiotee.on?.('error', handleError);
-  audiotee.on?.('log', handleLog);
 
   await audiotee.start();
 
@@ -115,7 +110,6 @@ async function startSystemAudioCapture(onData) {
       if (typeof removeListener === 'function') {
         removeListener('data', handleData);
         removeListener('error', handleError);
-        removeListener('log', handleLog);
       }
 
       await audiotee.stop();

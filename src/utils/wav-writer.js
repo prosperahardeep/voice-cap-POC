@@ -53,22 +53,10 @@ class WavFileWriter {
 
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     this.fd = fs.openSync(this.filePath, 'w');
-    fs.writeSync(this.fd, Buffer.alloc(44), 0, 44, 0);
+    this.writeHeader();
   }
 
-  writePcmChunk(chunk) {
-    if (this.fd == null) {
-      throw new Error('Cannot write to a closed WAV file.');
-    }
-
-    const buffer = normalizeChunk(chunk);
-    const position = 44 + this.dataSize;
-
-    fs.writeSync(this.fd, buffer, 0, buffer.length, position);
-    this.dataSize += buffer.length;
-  }
-
-  close() {
+  writeHeader() {
     if (this.fd == null) {
       return;
     }
@@ -81,6 +69,27 @@ class WavFileWriter {
     });
 
     fs.writeSync(this.fd, header, 0, header.length, 0);
+  }
+
+  writePcmChunk(chunk) {
+    if (this.fd == null) {
+      throw new Error('Cannot write to a closed WAV file.');
+    }
+
+    const buffer = normalizeChunk(chunk);
+    const position = 44 + this.dataSize;
+
+    fs.writeSync(this.fd, buffer, 0, buffer.length, position);
+    this.dataSize += buffer.length;
+    this.writeHeader();
+  }
+
+  close() {
+    if (this.fd == null) {
+      return;
+    }
+
+    this.writeHeader();
     fs.closeSync(this.fd);
     this.fd = null;
   }

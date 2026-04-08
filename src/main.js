@@ -26,9 +26,13 @@ let micWriter = null;
 let systemWriter = null;
 let micTranscriber = null;
 let systemTranscriber = null;
+let micActivityMonitor = null;
+let systemActivityMonitor = null;
 let transcriptWindow = null;
 let shuttingDown = false;
 let transcriptIpcRegistered = false;
+const AUDIO_ACTIVITY_THRESHOLD = 12;
+const SILENCE_WARNING_CHUNK_COUNT = 25;
 
 const transcriptState = {
   meta: {
@@ -87,14 +91,77 @@ function updateSourceState(kind, update) {
   publishTranscriptState();
 }
 
-function formatTimestamp(timestampMs) {
-  return new Date(timestampMs).toISOString();
+function getActiveCaptureDetail(kind, audioDetected = false) {
+  const sourceName = kind === 'system' ? 'system audio' : 'microphone audio';
+  const suffix = audioDetected ? 'Audio detected.' : 'Waiting for audio...';
+  return `Capturing ${sourceName} at 16 kHz mono. ${suffix}`;
 }
 
-function logChunk(kind, chunk) {
-  console.log(
-    `${formatTimestamp(chunk.timestampMs)} ${kind} chunk received (${chunk.byteLength} bytes, ${chunk.sampleCount} samples)`
-  );
+function getSilenceCaptureDetail(kind) {
+  if (kind === 'system') {
+    return 'System audio capture is active, but only silence has been received so far. Check macOS System Audio Recording permission and confirm audio is playing.';
+  }
+
+  return 'Microphone capture is active, but only silence has been received so far. Check microphone permission and input level.';
+}
+
+function createAudioActivityMonitor(kind) {
+  return {
+    kind,
+    chunksSeen: 0,
+    audioDetected: false,
+    silenceWarningShown: false
+  };
+}
+
+function hasAudibleSamples(pcm) {
+  const sampleCount = Math.floor(pcm.byteLength / 2);
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    if (Math.abs(pcm.readInt16LE(index * 2)) > AUDIO_ACTIVITY_THRESHOLD) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function observeAudioChunk(kind, pcm) {
+  const monitor = kind === 'system' ? systemActivityMonitor : micActivityMonitor;
+
+  if (!monitor) {
+    return;
+  }
+
+  monitor.chunksSeen += 1;
+
+  if (hasAudibleSamples(pcm)) {
+    if (!monitor.audioDetected) {
+      monitor.audioDetected = true;
+      monitor.silenceWarningShown = false;
+      console.log(`[${kind}] Audio detected.`);
+      updateSourceState(kind, {
+        captureState: 'active',
+        captureDetail: getActiveCaptureDetail(kind, true)
+      });
+    }
+
+    return;
+  }
+
+  if (
+    !monitor.audioDetected &&
+    !monitor.silenceWarningShown &&
+    monitor.chunksSeen >= SILENCE_WARNING_CHUNK_COUNT
+  ) {
+    monitor.silenceWarningShown = true;
+    const detail = getSilenceCaptureDetail(kind);
+    console.warn(`[${kind}] ${detail}`);
+    updateSourceState(kind, {
+      captureState: 'active',
+      captureDetail: detail
+    });
+  }
 }
 
 function closeWriter(writer, label) {
@@ -116,6 +183,8 @@ function resetCaptureResources() {
   systemWriter = null;
   micTranscriber = null;
   systemTranscriber = null;
+  micActivityMonitor = null;
+  systemActivityMonitor = null;
 }
 
 function installTranscriptIpc() {
@@ -319,6 +388,7 @@ async function startCaptures() {
   const shouldCaptureMic = await hasAudioInputDevice();
 
   if (shouldCaptureMic) {
+    micActivityMonitor = createAudioActivityMonitor('mic');
     micWriter = new WavFileWriter(path.join(process.cwd(), 'mic.wav'), {
       sampleRate: TARGET_SAMPLE_RATE,
       channels: TARGET_CHANNELS,
@@ -344,6 +414,7 @@ async function startCaptures() {
     channels: TARGET_CHANNELS,
     bitsPerSample: 16
   });
+  systemActivityMonitor = createAudioActivityMonitor('system');
   configureSourceOutput('system', systemWriter);
   console.log(`[main] Writing system output to ${systemWriter.filePath}`);
 
@@ -373,26 +444,26 @@ async function startCaptures() {
 
   try {
     systemCapture = await startSystemAudioCapture((chunk) => {
-      logChunk('system', chunk);
+      observeAudioChunk('system', chunk.pcm);
       systemWriter.writePcmChunk(chunk.pcm);
       systemTranscriber?.sendPcmChunk(chunk.pcm);
     });
 
     updateSourceState('system', {
       captureState: 'active',
-      captureDetail: 'Capturing system audio at 16 kHz mono.'
+      captureDetail: getActiveCaptureDetail('system')
     });
 
     if (shouldCaptureMic) {
       micCapture = await startMicCapture((chunk) => {
-        logChunk('mic', chunk);
+        observeAudioChunk('mic', chunk.pcm);
         micWriter.writePcmChunk(chunk.pcm);
         micTranscriber?.sendPcmChunk(chunk.pcm);
       });
 
       updateSourceState('mic', {
         captureState: 'active',
-        captureDetail: 'Capturing microphone audio at 16 kHz mono.'
+        captureDetail: getActiveCaptureDetail('mic')
       });
     }
   } catch (error) {

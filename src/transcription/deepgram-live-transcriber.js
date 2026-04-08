@@ -126,6 +126,8 @@ class DeepgramLiveTranscriber {
       return;
     }
 
+    console.log(`[${this.kind}][deepgram] Live transcription connected.`);
+
     this.setState({
       transcriptionState: 'listening',
       transcriptionDetail: `Streaming live transcription with Deepgram (${this.model}).`
@@ -208,11 +210,12 @@ class DeepgramLiveTranscriber {
 
   handleError(error) {
     const message = error?.message || String(error);
-    console.error(`[${this.kind}][deepgram]`, error);
 
     if (this.stopping) {
       return;
     }
+
+    console.error(`[${this.kind}][deepgram] ${message}`);
 
     this.setState({
       transcriptionState: 'error',
